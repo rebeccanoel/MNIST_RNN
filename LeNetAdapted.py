@@ -44,6 +44,14 @@ submission_dataset = pd.read_csv(file_path)
 image_size = 28
 num_labels = 10
 num_channels = 1 # grayscale
+batch_size = 16
+
+#the following included to bridge RNN and LeNet Code with diff variable names
+input_size = image_size**2
+num_classes = num_labels
+state_size = 2000
+num_batches = 2000
+num_steps = 2
 
 import numpy as np
 
@@ -116,7 +124,7 @@ def accuracy(predictions, labels):
   #leNet5
 image_size = 28
 
-batch_size = 16
+
 kernelSize = 5
 depth1Size = 6
 depth2Size = 16
@@ -128,7 +136,7 @@ poolStride = 2
 poolFilterSize = 2
 
 FC1HiddenUnit = 360
-FC2HiddenUnit = 256
+FC2HiddenUnit = 784
 
 learningRate=1e-4
 
@@ -151,18 +159,34 @@ def conv2d(x,W,name):
 def maxPool_2x2(x,name):
     return tf.nn.max_pool(x,ksize=[1,2,2,1],strides=[1,2,2,1],padding=padding,name=name)
 
+def rnn_cell(rnn_input, W, b, state):
+	print("Trying to concat rnn_input + state: ", rnn_input, " + ", state)
+	print("Trying to multiply concat * W: ", tf.concat([rnn_input, state], 1), " * ", W)
+	print("Trying to add: matmul + b", tf.matmul(tf.concat([rnn_input, state], 1), W), " + ", b)
+	return tf.nn.relu(tf.matmul(tf.concat([rnn_input, state], 1), W) + b)
+
 graph = tf.Graph()
 with graph.as_default():
-    
+    '''
+    #init_state = tf.placeholder(tf.float32, shape = [input_size,state_size], name = "Initial_State")
+    init_state _train= tf.placeholder(tf.float32, shape = [None,state_size], name = "Initial_State")
+    #init state either needs to have num_labels or state_size as it's shape at its 1 position, but either triggers an error, either in the calculation of rnn_cell or in the implementation of lenet5 (for the latter)
+    '''
     #Input data 
+
+    ####ADD NUM_STEPS PARAMETER
     tf_train_dataset   = tf.placeholder(tf.float32,shape=(batch_size,image_size,image_size,num_channels))
     tf_train_labels    = tf.placeholder(tf.float32,shape=(batch_size,num_labels))
+    init_state_train = tf.zeros([batch_size,state_size])
     #validation data 
     tf_valid_dataset   = tf.constant(valid_dataset)
+    init_state_valid = tf.zeros([4200,state_size])
     #test data
     tf_test_dataset    = tf.constant(test_dataset)
+    init_state_test = tf.zeros([4200,state_size])
     #submission data
     tf_submission_data = tf.placeholder(tf.float32,shape=(28000,image_size,image_size,num_channels))
+    init_state_sub = tf.zeros([28000,state_size])
     
     with tf.name_scope('convolution1') as scope:
         #weight & biases
@@ -191,18 +215,30 @@ with graph.as_default():
         tf.summary.histogram("FC2_b",FC2_b)
         
     with tf.name_scope('fullyConct3') as scope:
-        FC3_w = weightBuilder([FC2HiddenUnit,num_labels],"FC3_w")
+        #FC3_w = weightBuilder([FC2HiddenUnit,num_labels],"FC3_w")
+        FC3_w = weightBuilder([state_size,num_labels],"FC3_w")
+        #FC3_b = biasesBuilder([num_labels],"FC3_b")
         FC3_b = biasesBuilder([num_labels],"FC3_b")
         tf.summary.histogram("FC3_w",FC3_w)
         tf.summary.histogram("FC3_b",FC3_b)
-        
-    def leNet5(data):
+
+    with tf.name_scope('RNN_Layer') as scope:
+    	RNN_w = weightBuilder([state_size + input_size, state_size], name = "RNN_Weights")
+    	#RNN_w = weightBuilder([state_size + input_size, num_labels], name = "RNN_Weights")
+    	#changing RNN_W[0] from satate_size + input size to just input_size changes the error
+    	#RNN_b = biasesBuilder([state_size, FC2HiddenUnit], name = "RNN_Biases")
+    	RNN_b = biasesBuilder([state_size], name = "RNN_Biases")
+    	#RNN_b = biasesBuilder([num_labels], name = "RNN_Biases")
+    
+
+    
+    def leNet5(data,state_in):
         #C1
         h_conv = tf.nn.relu(conv2d(data,C1_w,"conv1")+C1_b)
         #S2
         h_pool = maxPool_2x2(h_conv,"pool1")
-        
-        #C3
+       
+        #C3 
         h_conv = tf.nn.relu(conv2d(h_pool,C2_w,"conv2")+C2_b)
         #S4
         h_pool = maxPool_2x2(h_conv,"pool2")
@@ -219,18 +255,68 @@ with graph.as_default():
         
         #F6
         h_FC2 = tf.nn.relu(tf.matmul(h_FC1,FC2_w)+FC2_b)
-        #h_FC2 = tf.nn.dropout(h_FC2,keep_prob=keep_prob)
+        h_FC2 = tf.nn.dropout(h_FC2,keep_prob=keep_prob)
+    
+
+        #h_FC2 --> (16,784)
+        #state --> (784,2000) (can't concat)
+        state_out = rnn_cell(h_FC2, RNN_w, RNN_b, state_in)
+
+        #FC3
+        FC_output = tf.matmul(state_out,FC3_w)+FC3_b
+        print("This is FC_Output: ", FC_output)
+        #shape is (16, 10)
+
+        #RNN
+        print("THIS IS RNN_INPUT", FC_output)
+        #rnn_in = tf.expand_dims(FC_output, 1)
+        #rnn_in = FC_output
+        	#RNN_w is (20,26)
+        	#RNN_b is (16,256)
+        #trying to move state = init_state outside of lenet function so that it doesn't reset at every iteration
+        #state = init_state
         
-        #OUTPUT
-        model = tf.matmul(h_FC2,FC3_w)+FC3_b
-        return model
+
+        return state_out, FC_output #rnn_cell(rnn_in, RNN_w, RNN_b, state)
+
+
+
+        '''
+        state = rnn_cell(rnn_in, RNN_w, RNN_b, state)
+        	#MAKE RNN_IN THE SIZE OF A BATCH OF IMAGES AKA SHAPE = (16,784)
+        print("!!!!!! THIS IS STATE: ", state)
+        rnn_outputs.append(state)
+        print("RNN_outputs: ", rnn_outputs)
+        print("implementation trying to concat: FC_output + state", FC_output, " + ", state)
+        #print("CONCAT PRODUCT IS: ", tf.concat([tf.cast(FC_output,tf.float32), tf.cast(state, tf.float32)], 1))
+        print("TRYING TO MULTIPLY: CONCAT * RNN_W:", tf.concat([tf.cast(FC_output,tf.float32), tf.cast(state, tf.float32)], 1), " * ", RNN_w)
+        output = tf.nn.relu(tf.matmul(tf.concat([tf.cast(FC_output,tf.float32), tf.cast(state, tf.float32)], 1), RNN_w) + RNN_b)
+        return output
+        
+        removed this bc not sure why you would want to return a list - hoping this gives target output size of (16,10) for logits
+        #FC_output = (16,784), state = (16,10)
+        #concat product is then (16,794)
+        #trying to multiply (16,794) * (2784, 10)
+
+        #output
+        print("LENET5 OUTPUT: ", rnn_outputs)
+        for rnn_out in rnn_outputs:
+        	print("this is an index of rnn_outputs: ", rnn_out)
+
+        return rnn_outputs
+ 		'''
 
     #train computation
-    logits = leNet5(tf_train_dataset)
+    state_out, logits = leNet5(tf_train_dataset, init_state_train)
+
+    #
     
     with tf.name_scope('loss') as scope:
-        loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits,labels=tf_train_labels))
-        tf.summary.scalar("cost_function", loss)
+    	print("THIS IS LOGITS: ", logits)
+    	print("THIS IS LABELS: ", tf_train_labels)
+    	loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits,labels=tf_train_labels))
+    	#logits has dim (16, 2000), should be (16, 10)
+    	tf.summary.scalar("cost_function", loss)
         
         
     #global_step = tf.Variable(0, trainable=False)  # count the number of steps taken.
@@ -239,13 +325,17 @@ with graph.as_default():
     optimizer = tf.train.AdamOptimizer(learning_rate=learningRate).minimize(loss)
     
     #Prediction for training ,valid,test set
+    #state = init_state
     train_prediction = tf.nn.softmax(logits)
-    valid_prediction = tf.nn.softmax(leNet5(tf_valid_dataset))
-    test_prediction  = tf.nn.softmax(leNet5(tf_test_dataset))
-    
-    submission_prediction = tf.nn.softmax(leNet5(tf_submission_data))
-    
-    #merge all summary 
+    print("!!!!This is train_prediction: ", train_prediction)
+    x, valid_output = leNet5(tf_valid_dataset, init_state_valid)
+    valid_prediction = tf.nn.softmax(valid_output)
+    z, test_out = leNet5(tf_test_dataset, init_state_test)
+    test_prediction  = tf.nn.softmax(test_out)
+    t, sub_out = leNet5(tf_submission_data, init_state_sub)
+    submission_prediction = tf.nn.softmax(sub_out)
+
+    #merge all summary tf_valid_dataset
     merged = tf.summary.merge_all()
 
 #%%time
@@ -329,4 +419,5 @@ with tf.Session(graph=graph) as session:
     results = pd.DataFrame({'ImageId': pd.Series(range(1, len(sub_precition[0]) + 1)),
                             'Label'  : pd.Series(sub_precition[0])})
     results.to_csv('LeNet5Results.csv', index=False)
+
 
