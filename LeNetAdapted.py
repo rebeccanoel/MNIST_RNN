@@ -56,16 +56,30 @@ num_steps = 2
 import numpy as np
 
 def reformat(dataset, labels):
-  dataset = dataset.reshape((-1, image_size, image_size, num_channels)).astype(np.float32)
+  #dataset = dataset.reshape((-1, num_steps, image_size, image_size, num_channels)).astype(np.float32)
+  dataset = dataset.reshape((-1, num_steps, image_size, image_size, num_channels)).astype(np.float32)
   labels = (np.arange(num_labels) == labels[:,None]).astype(np.float32)
   return dataset, labels
-  
+
+
+#the following created to unstack matricies in the case where num_steps is included in the tensor shape itsself
+tr_data, train_labels = reformat(X_train, y_train)
+v_data, valid_labels = reformat(X_validation, y_validation)
+te_data , test_labels  = reformat(X_test, y_test)
+submission_dataset = submission_dataset.as_matrix().reshape((-1, image_size, image_size, num_channels)).astype(np.float32)
+#Unstacking in order to incorporate num_steps parameter in above
+train_dataset = tf.unstack(tr_data, num = num_steps, axis = 1)
+valid_dataset = tf.unstack(v_data, num = num_steps, axis = 1)
+test_dataset = tf.unstack(te_data, num = num_steps, axis = 1)
+print ('Training set   :', train_dataset.shape, train_labels.shape)
+
+'''
 train_dataset, train_labels = reformat(X_train, y_train)
 valid_dataset, valid_labels = reformat(X_validation, y_validation)
 test_dataset , test_labels  = reformat(X_test, y_test)
 submission_dataset = submission_dataset.as_matrix().reshape((-1, image_size, image_size, num_channels)).astype(np.float32)
+'''
 
-print ('Training set   :', train_dataset.shape, train_labels.shape)
 print ('Validation set :', valid_dataset.shape, valid_labels.shape)
 print ('Test set       :', test_dataset.shape, test_labels.shape)
 print ('Submission data:', submission_dataset.shape)
@@ -165,15 +179,24 @@ def rnn_cell(rnn_input, W, b, state):
 	print("Trying to add: matmul + b", tf.matmul(tf.concat([rnn_input, state], 1), W), " + ", b)
 	return tf.nn.relu(tf.matmul(tf.concat([rnn_input, state], 1), W) + b)
 
+
+
+
+
+
+
+train_dataset = tf.unstack(tr_data, num = num_steps, axis = 1)
+valid_dataset = tf.unstack(v_data, num = num_steps, axis = 1)
+test_dataset
+
+
+
+
+
+
 graph = tf.Graph()
 with graph.as_default():
-    '''
-    #init_state = tf.placeholder(tf.float32, shape = [input_size,state_size], name = "Initial_State")
-    init_state _train= tf.placeholder(tf.float32, shape = [None,state_size], name = "Initial_State")
-    #init state either needs to have num_labels or state_size as it's shape at its 1 position, but either triggers an error, either in the calculation of rnn_cell or in the implementation of lenet5 (for the latter)
-    '''
     #Input data 
-
     ####ADD NUM_STEPS PARAMETER
     tf_train_dataset   = tf.placeholder(tf.float32,shape=(batch_size,image_size,image_size,num_channels))
     tf_train_labels    = tf.placeholder(tf.float32,shape=(batch_size,num_labels))
@@ -215,20 +238,14 @@ with graph.as_default():
         tf.summary.histogram("FC2_b",FC2_b)
         
     with tf.name_scope('fullyConct3') as scope:
-        #FC3_w = weightBuilder([FC2HiddenUnit,num_labels],"FC3_w")
         FC3_w = weightBuilder([state_size,num_labels],"FC3_w")
-        #FC3_b = biasesBuilder([num_labels],"FC3_b")
         FC3_b = biasesBuilder([num_labels],"FC3_b")
         tf.summary.histogram("FC3_w",FC3_w)
         tf.summary.histogram("FC3_b",FC3_b)
 
     with tf.name_scope('RNN_Layer') as scope:
     	RNN_w = weightBuilder([state_size + input_size, state_size], name = "RNN_Weights")
-    	#RNN_w = weightBuilder([state_size + input_size, num_labels], name = "RNN_Weights")
-    	#changing RNN_W[0] from satate_size + input size to just input_size changes the error
-    	#RNN_b = biasesBuilder([state_size, FC2HiddenUnit], name = "RNN_Biases")
     	RNN_b = biasesBuilder([state_size], name = "RNN_Biases")
-    	#RNN_b = biasesBuilder([num_labels], name = "RNN_Biases")
     
 
     
@@ -269,42 +286,9 @@ with graph.as_default():
 
         #RNN
         print("THIS IS RNN_INPUT", FC_output)
-        #rnn_in = tf.expand_dims(FC_output, 1)
-        #rnn_in = FC_output
-        	#RNN_w is (20,26)
-        	#RNN_b is (16,256)
-        #trying to move state = init_state outside of lenet function so that it doesn't reset at every iteration
-        #state = init_state
         
 
         return state_out, FC_output #rnn_cell(rnn_in, RNN_w, RNN_b, state)
-
-
-
-        '''
-        state = rnn_cell(rnn_in, RNN_w, RNN_b, state)
-        	#MAKE RNN_IN THE SIZE OF A BATCH OF IMAGES AKA SHAPE = (16,784)
-        print("!!!!!! THIS IS STATE: ", state)
-        rnn_outputs.append(state)
-        print("RNN_outputs: ", rnn_outputs)
-        print("implementation trying to concat: FC_output + state", FC_output, " + ", state)
-        #print("CONCAT PRODUCT IS: ", tf.concat([tf.cast(FC_output,tf.float32), tf.cast(state, tf.float32)], 1))
-        print("TRYING TO MULTIPLY: CONCAT * RNN_W:", tf.concat([tf.cast(FC_output,tf.float32), tf.cast(state, tf.float32)], 1), " * ", RNN_w)
-        output = tf.nn.relu(tf.matmul(tf.concat([tf.cast(FC_output,tf.float32), tf.cast(state, tf.float32)], 1), RNN_w) + RNN_b)
-        return output
-        
-        removed this bc not sure why you would want to return a list - hoping this gives target output size of (16,10) for logits
-        #FC_output = (16,784), state = (16,10)
-        #concat product is then (16,794)
-        #trying to multiply (16,794) * (2784, 10)
-
-        #output
-        print("LENET5 OUTPUT: ", rnn_outputs)
-        for rnn_out in rnn_outputs:
-        	print("this is an index of rnn_outputs: ", rnn_out)
-
-        return rnn_outputs
- 		'''
 
     #train computation
     state_out, logits = leNet5(tf_train_dataset, init_state_train)
@@ -319,13 +303,12 @@ with graph.as_default():
     	tf.summary.scalar("cost_function", loss)
         
         
-    #global_step = tf.Variable(0, trainable=False)  # count the number of steps taken.
-    #learning_rate = tf.train.exponential_decay(learningRate,global_step,200, 0.00001, staircase=True)
+    global_step = tf.Variable(0, trainable=False)  # count the number of steps taken.
+    learning_rate = tf.train.exponential_decay(learningRate,global_step,200, 0.00001, staircase=True)
     #Optimizer
     optimizer = tf.train.AdamOptimizer(learning_rate=learningRate).minimize(loss)
     
     #Prediction for training ,valid,test set
-    #state = init_state
     train_prediction = tf.nn.softmax(logits)
     print("!!!!This is train_prediction: ", train_prediction)
     x, valid_output = leNet5(tf_valid_dataset, init_state_valid)
@@ -419,5 +402,4 @@ with tf.Session(graph=graph) as session:
     results = pd.DataFrame({'ImageId': pd.Series(range(1, len(sub_precition[0]) + 1)),
                             'Label'  : pd.Series(sub_precition[0])})
     results.to_csv('LeNet5Results.csv', index=False)
-
 
