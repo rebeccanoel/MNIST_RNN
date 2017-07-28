@@ -57,7 +57,7 @@ import numpy as np
 
 def reformat(dataset, labels):
   #dataset = dataset.reshape((-1, num_steps, image_size, image_size, num_channels)).astype(np.float32)
-  dataset = dataset.reshape((-1, num_steps, image_size, image_size, num_channels)).astype(np.float32)
+  dataset = dataset.reshape((-1, image_size, image_size, num_channels)).astype(np.float32)
   labels = (np.arange(num_labels) == labels[:,None]).astype(np.float32)
   return dataset, labels
 
@@ -68,8 +68,9 @@ submission_dataset = submission_dataset.as_matrix().reshape((-1, image_size, ima
 
 
 def gen_timestep_matrix(data, num_steps):
-    expanded_tensor = np.tile(data,num_steps)
-    return expanded_tensor
+    expanded_tensor = np.expand_dims(data, axis = -1)
+    repeat = np.repeat(expanded_tensor,num_steps, axis = -1)
+    return repeat
 
 #Original Input Data Format from Le Net
 
@@ -197,7 +198,9 @@ with graph.as_default():
     #tf_train_dataset   = tf.placeholder(tf.float32,shape=(num_steps, batch_size,image_size,image_size,num_channels))
     #tf_train_labels    = tf.placeholder(tf.float32,shape=(num_steps, batch_size,num_labels))
     init_state_train = tf.zeros([batch_size,state_size])
-    init_state_valid = tf.zeros([batch_size,state_size])
+    #init_state_valid = tf.zeros([batch_size,state_size])
+    init_state_valid = tf.zeros([4200,state_size])
+    init_state_test = tf.zeros([4200,state_size])
     tf_submission_data = tf.placeholder(tf.float32,shape=(num_steps, 28000,image_size,image_size,num_channels))
     init_state_sub = tf.zeros([28000,state_size])
 
@@ -221,24 +224,25 @@ with graph.as_default():
        
         #C3 
         h_conv = tf.nn.relu(conv2d(h_pool,C2_w,"conv2")+C2_b)
-        
+
         #S4
         h_pool = maxPool_2x2(h_conv,"pool2")
-        
+
         #reshape last conv layer 
         shape = h_pool.get_shape().as_list()
         h_pool_reshaped = tf.reshape(h_pool,[shape[0],shape[1]*shape[2]*shape[3]])
-        
         #FULLY CONNECTED NET
         
         #F5
         h_FC1 = tf.nn.relu(tf.matmul(h_pool_reshaped,FC1_w)+FC1_b)
         h_FC1 = tf.nn.dropout(h_FC1, keep_prob=keep_prob)
         
+
         #F6
         h_FC2 = tf.nn.relu(tf.matmul(h_FC1,FC2_w)+FC2_b)
         h_FC2 = tf.nn.dropout(h_FC2,keep_prob=keep_prob)
         
+
         #RNN
         state_out = rnn_cell(h_FC2, RNN_w, RNN_b, state_in)
 
@@ -249,31 +253,45 @@ with graph.as_default():
         return state_out, FC_output #rnn_cell(rnn_in, RNN_w, RNN_b, state)
     
 
+    #TRAINING, VALIDATION, TESTING AND SUBMISSION LOOPS
+
     tt=tf.unstack(tf_train_dataset, axis = -1)
-    state_out = init_state_train
-    #print("this is tt: ", tt)
-    #print("this is train_dataset: ", train_dataset)
+    state_out_train = []
+    logits_train = []
+    state_out_train.append(init_state_train)
     for train in tt:
-        #print("!!!!! This is train: ", train)
-        state_out, logits = leNet5(train, state_out)
-    #state_out = init_state_valid
+        state_out_tmp, logits_tr = leNet5(train, state_out_train[-1])
+        state_out_train.append(state_out_tmp)
+        logits_train.append(logits_tr)
+
     
     tv = tf.unstack(tf_valid_dataset, axis = -1)
-    print("This is tv before and after unstack: ", tf_valid_dataset, tv)
-
+    state_out_validation = []
+    logits_val = []
+    state_out_validation.append(init_state_valid)
     for valid in tv:
-        print("@@@ this is data passed into lenet: ", valid)
-        state_out, logits = leNet5(valid, state_out)
-    #state_out = init_state_test
+        state_out_v_tmp, logits_v = leNet5(valid, state_out_validation[-1])
+        state_out_validation.append(state_out_v_tmp)
+        logits_val.append(logits_v)
+    
 
-    tte = tf.unstack(tf_test_dataset)
+    tte = tf.unstack(tf_test_dataset,axis = -1)
+    state_out_test = []
+    logits_test = []
+    state_out_test.append(init_state_test)
     for test in tte:
-        state_out, logits = leNet5(test, state_out)
+        state_out_te_tmp, logits_tst = leNet5(test, state_out_test[-1])
+        state_out_test.append(state_out_te_tmp)
+        logits_test.append(logits_tst)
 
     ts = tf.unstack(tf_submission_data, axis = -1)
-    state_out = init_state_sub
+    state_out_sub = []
+    logits_sub = []
+    state_out_sub.append(init_state_sub)
     for sub in ts:
-        state_out, logits = leNet(sub, state_out)
+        state_out_sub_tmp, logits_sb = leNet5(sub, state_out_sub[-1])
+        state_out_sub.append(state_out_sub_tmp)
+        logits_sub.append(logits_sb)
 
     with tf.name_scope('convolution1') as scope:
         #weight & biases
@@ -295,10 +313,6 @@ with graph.as_default():
     with tf.name_scope('fullyConct3') as scope:
         tf.summary.histogram("FC3_w",FC3_w)
         tf.summary.histogram("FC3_b",FC3_b)
-
-    #with tf.name_scope('RNN_Layer') as scope:
-
-
     
 
 
@@ -308,26 +322,32 @@ with graph.as_default():
     #
     
     with tf.name_scope('loss') as scope:
-        print("THIS IS LOGITS: ", logits)
+        print("!!THIS IS LOGITS: ", logits_train)
         print("THIS IS LABELS: ", tf_train_labels)
-        loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits,labels=tf_train_labels))
+        loss = []
+        training_labels = tf.unstack(tf_train_labels, axis = -1)
+        for n in training_labels:
+            loss.append(tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits_train[-1],labels=n)))
         #logits has dim (16, 2000), should be (16, 10)
-        tf.summary.scalar("cost_function", loss)
+        final_loss = loss[0]
+        for r in range(1, len(loss)):
+            final_loss += loss[r]
+        tf.summary.scalar("cost_function", final_loss)
         
         
     global_step = tf.Variable(0, trainable=False)  # count the number of steps taken.
     learning_rate = tf.train.exponential_decay(learningRate,global_step,200, 0.00001, staircase=True)
     #Optimizer
-    optimizer = tf.train.AdamOptimizer(learning_rate=learningRate).minimize(loss)
+    optimizer = tf.train.AdamOptimizer(learning_rate=learningRate).minimize(loss[-1])
     
     #Prediction for training ,valid,test set
-    train_prediction = tf.nn.softmax(logits)
-    x, valid_output = leNet5(tf_valid_dataset, init_state_valid)
-    valid_prediction = tf.nn.softmax(valid_output)
-    z, test_out = leNet5(tf_test_dataset, init_state_test)
-    test_prediction  = tf.nn.softmax(test_out)
-    t, sub_out = leNet5(tf_submission_data, init_state_sub)
-    submission_prediction = tf.nn.softmax(sub_out)
+    train_prediction = tf.nn.softmax(logits_train[-1])
+    #x, valid_output = leNet5(tf_valid_dataset, init_state_valid)
+    valid_prediction = tf.nn.softmax(logits_val[-1])
+    #z, test_out = leNet5(tf_test_dataset, init_state_test)
+    test_prediction  = tf.nn.softmax(logits_test[-1])
+    #t, sub_out = leNet5(tf_submission_data, init_state_sub)
+    submission_prediction = tf.nn.softmax(state_out_sub[-1])
 
     #merge all summary tf_valid_dataset
     merged = tf.summary.merge_all()
@@ -367,22 +387,23 @@ with tf.Session(graph=graph) as session:
             # Prepare a dictionary telling the session where to feed the minibatch.
             # The key of the dictionary is the placeholder node of the graph to be fed,
             # and the value is the numpy array to feed to it.
-            feed_dict = {tf_train_dataset : batch_data,
-                         tf_train_labels : batch_labels,
+            feed_dict = {tf_train_dataset : gen_timestep_matrix(batch_data,num_steps),
+                         tf_train_labels : gen_timestep_matrix(batch_labels,num_steps),
                          keep_prob:0.5}
+            #print("(((( this is batch_data and batch_labels: ", np.shape(gen_timestep_matrix(batch_data,num_steps)), np.shape(gen_timestep_matrix(batch_labels,num_steps)))
 
             _, l, predictions,summary = session.run([optimizer, loss, train_prediction,merged], feed_dict=feed_dict)
 
             #append each summary 
             train_writer.add_summary(summary, epoch * total_batch + step)
             # Compute average loss
-            avg_cost += l / total_batch
+            avg_cost += l[-1] / total_batch
             
             
             if (step % 200 == 0):
                 valid_pred = session.run(valid_prediction,feed_dict={keep_prob:1})
                 print ('{:5}|{:15}|{:15}|{:15}'.format("{:d}".format(step),
-                                                      "{:.9f}".format(l),
+                                                      "{:.9f}".format(l[-1]),
                                                       "{:.9f}".format(accuracy(predictions, batch_labels)),
                                                       "{:.9f}".format(accuracy(valid_pred, valid_labels))))
         #end for batch
@@ -407,7 +428,7 @@ with tf.Session(graph=graph) as session:
     saver = tf.train.import_meta_graph(checkpoint_file +'.meta')
     saver.restore(session, checkpoint_file)
     sub_precition = session.run([tf.argmax(submission_prediction, 1)],
-                                feed_dict ={tf_submission_data:submission_dataset,keep_prob:1})
+                                feed_dict ={tf_submission_data:gen_timestep_matrix(submission_dataset, num_steps),keep_prob:1})
     
     # Write predictions to csv file
     results = pd.DataFrame({'ImageId': pd.Series(range(1, len(sub_precition[0]) + 1)),
