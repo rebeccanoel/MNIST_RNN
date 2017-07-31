@@ -9,9 +9,13 @@ import numpy as np
 import operator
 import matplotlib.pyplot as plt
 import os 
+import Const_HyperPara as con
 from datetime import datetime
 from tabulate import tabulate
 from sklearn.model_selection import train_test_split
+from LeNetFunction import leNet5
+from helper_functions import weightBuilder, biasesBuilder, conv2d, maxPool_2x2, rnn_cell
+
 
 #IMPORT DATA
 file_path ="./input/train.csv"
@@ -41,35 +45,24 @@ submission_dataset = pd.read_csv(file_path)
 
 #RESHAPE DATA
 #format array to image format 
-image_size = 28
-num_labels = 10
-num_channels = 1 # grayscale
-batch_size = 16
-
-#the following included to bridge RNN and LeNet Code with diff variable names
-input_size = image_size**2
-num_classes = num_labels
-state_size = 2000
-num_batches = 2000
-num_steps = 5
 
 import numpy as np
 
 def reformat(dataset, labels):
   #dataset = dataset.reshape((-1, num_steps, image_size, image_size, num_channels)).astype(np.float32)
-  dataset = dataset.reshape((-1, image_size, image_size, num_channels)).astype(np.float32)
-  labels = (np.arange(num_labels) == labels[:,None]).astype(np.float32)
+  dataset = dataset.reshape((-1, con.image_size, con.image_size, con.num_channels)).astype(np.float32)
+  labels = (np.arange(con.num_labels) == labels[:,None]).astype(np.float32)
   return dataset, labels
 
 train_dataset, train_labels = reformat(X_train, y_train)
 valid_dataset, valid_labels = reformat(X_validation, y_validation)
 test_dataset , test_labels  = reformat(X_test, y_test)
-submission_dataset = submission_dataset.as_matrix().reshape((-1, image_size, image_size, num_channels)).astype(np.float32)
+submission_dataset = submission_dataset.as_matrix().reshape((-1, con.image_size, con.image_size, con.num_channels)).astype(np.float32)
 
 
 def gen_timestep_matrix(data, num_steps):
     expanded_tensor = np.expand_dims(data, axis = -1)
-    repeat = np.repeat(expanded_tensor,num_steps, axis = -1)
+    repeat = np.repeat(expanded_tensor,con.num_steps, axis = -1)
     return repeat
 
 #Original Input Data Format from Le Net
@@ -85,7 +78,6 @@ del X_train,X_validation,X_test,y_train,y_validation,y_test
 #get final image size 
 # Create image size function based on input, filter size, padding and stride
 # 2 convolutions only
-image_size = 28
 def output_size_no_pool(input_size, filter_size, padding, conv_stride):
     if padding == 'same':
         padding = -1.00
@@ -97,11 +89,12 @@ def output_size_no_pool(input_size, filter_size, padding, conv_stride):
     output_2 = float(((output_1 - filter_size - 2*padding) / conv_stride) + 1.00)
     return int(np.ceil(output_2))
 
-patch_size = 5
-final_image_size = output_size_no_pool(image_size, patch_size, padding='same', conv_stride=2)
+#patch_size = 5
+final_image_size = output_size_no_pool(con.image_size, con.patch_size, padding='same', conv_stride=2)
 print(final_image_size)
 
-image_size = 28
+
+#image_size = 28
 # Create image size function based on input, filter size, padding and stride
 # 2 convolutions only with 2 pooling
 def output_size_pool(input_size, conv_filter_size, pool_filter_size, padding, conv_stride, pool_stride):
@@ -121,7 +114,7 @@ def output_size_pool(input_size, conv_filter_size, pool_filter_size, padding, co
     output_4 = (((output_3 - pool_filter_size - 2*padding) / pool_stride) + 1.00)  
     return int(output_4)
 
-final_image_size = output_size_pool(input_size=image_size, conv_filter_size=5, pool_filter_size=2, padding='SAME', conv_stride=1, pool_stride=2)
+final_image_size = output_size_pool(input_size=con.image_size, conv_filter_size=5, pool_filter_size=2, padding='SAME', conv_stride=1, pool_stride=2)
 print(final_image_size)
 
 #LE-NET5
@@ -129,28 +122,10 @@ def accuracy(predictions, labels):
   return (100.0 * np.sum(np.argmax(predictions, 1) == np.argmax(labels, 1))
           / predictions.shape[0])
 
-  #leNet5
-image_size = 28
 
-
-kernelSize = 5
-depth1Size = 6
-depth2Size = 16
-num_channels = 1
-
-padding="SAME"
-convStride = 1
-poolStride = 2
-poolFilterSize = 2
-
-FC1HiddenUnit = 360
-FC2HiddenUnit = 784
-
-learningRate=1e-4
-
-finalImageSize = output_size_pool(input_size=image_size, conv_filter_size=kernelSize,
-                                  pool_filter_size=poolFilterSize, padding=padding,
-                                  conv_stride=convStride, pool_stride=poolStride)
+finalImageSize = output_size_pool(input_size=con.image_size, conv_filter_size=con.kernelSize,
+                                  pool_filter_size=con.poolFilterSize, padding=con.padding,
+                                  conv_stride=con.convStride, pool_stride=con.poolStride)
 
 
 
@@ -163,95 +138,40 @@ removing def of weight builder etc. from here
 graph = tf.Graph()
 with graph.as_default():
 
-    def weightBuilder(shape,name):
-    #shape = [patchSize,patchSize,channel,depth]
-        return tf.Variable(tf.truncated_normal(shape, stddev=0.01),name=name)
-
-    def biasesBuilder(shape,name):
-        #shape = depth  size
-        return tf.Variable(tf.constant(1.0, shape=shape),name=name)
-
-    def conv2d(x,W,name):
-        return tf.nn.conv2d(x,W,strides=[1,1,1,1],padding=padding,name=name)
-
-    def maxPool_2x2(x,name):
-        return tf.nn.max_pool(x,ksize=[1,2,2,1],strides=[1,2,2,1],padding=padding,name=name)
-
-    def rnn_cell(rnn_input, W, b, state):
-        return tf.nn.relu(tf.matmul(tf.concat([rnn_input, state], 1), W) + b)
-
-    C1_w = weightBuilder([kernelSize,kernelSize,1,depth1Size],"C1_w")
-    C1_b = biasesBuilder([depth1Size],"C1_b")
-    C2_w = weightBuilder([kernelSize,kernelSize,depth1Size,depth2Size],"C2_w")
-    C2_b = biasesBuilder([depth2Size],"C2_b")
-    FC1_w = weightBuilder([finalImageSize*finalImageSize*depth2Size,FC1HiddenUnit],"FC1_w")
-    FC1_b = biasesBuilder([FC1HiddenUnit],"FC1_b")
+    C1_w = weightBuilder([con.kernelSize,con.kernelSize,1,con.depth1Size],"C1_w")
+    C1_b = biasesBuilder([con.depth1Size],"C1_b")
+    C2_w = weightBuilder([con.kernelSize,con.kernelSize,con.depth1Size,con.depth2Size],"C2_w")
+    C2_b = biasesBuilder([con.depth2Size],"C2_b")
+    FC1_w = weightBuilder([finalImageSize*finalImageSize*con.depth2Size,con.FC1HiddenUnit],"FC1_w")
+    FC1_b = biasesBuilder([con.FC1HiddenUnit],"FC1_b")
     keep_prob = tf.placeholder(dtype=tf.float32,name="keepProb")
-    FC2_w = weightBuilder([FC1HiddenUnit,FC2HiddenUnit],"FC2_w")
-    FC2_b = biasesBuilder([FC2HiddenUnit],"FC2_b")
-    FC3_w = weightBuilder([state_size,num_labels],"FC3_w")
-    FC3_b = biasesBuilder([num_labels],"FC3_b")
-    RNN_w = weightBuilder([state_size + input_size, state_size], name = "RNN_Weights")
-    RNN_b = biasesBuilder([state_size], name = "RNN_Biases")
+    FC2_w = weightBuilder([con.FC1HiddenUnit,con.FC2HiddenUnit],"FC2_w")
+    FC2_b = biasesBuilder([con.FC2HiddenUnit],"FC2_b")
+    FC3_w = weightBuilder([con.state_size,con.num_labels],"FC3_w")
+    FC3_b = biasesBuilder([con.num_labels],"FC3_b")
+    RNN_w = weightBuilder([con.state_size + con.input_size, con.state_size], name = "RNN_Weights")
+    RNN_b = biasesBuilder([con.state_size], name = "RNN_Biases")
 
 
     #tf_train_dataset   = tf.placeholder(tf.float32,shape=(num_steps, batch_size,image_size,image_size,num_channels))
     #tf_train_labels    = tf.placeholder(tf.float32,shape=(num_steps, batch_size,num_labels))
-    init_state_train = tf.zeros([batch_size,state_size])
+    init_state_train = tf.zeros([con.batch_size,con.state_size])
     #init_state_valid = tf.zeros([batch_size,state_size])
-    init_state_valid = tf.zeros([4200,state_size])
-    init_state_test = tf.zeros([4200,state_size])
-    tf_submission_data = tf.placeholder(tf.float32,shape=(num_steps, 28000,image_size,image_size,num_channels))
-    init_state_sub = tf.zeros([28000,state_size])
+    init_state_valid = tf.zeros([4200,con.state_size])
+    init_state_test = tf.zeros([4200,con.state_size])
+    tf_submission_data = tf.placeholder(tf.float32,shape=(con.num_steps, 28000,con.image_size,con.image_size,con.num_channels))
+    init_state_sub = tf.zeros([28000,con.state_size])
 
 
-    tf_train_dataset   = tf.placeholder(tf.float32,shape=(batch_size,image_size,image_size,num_channels,num_steps))
-    tf_train_labels    = tf.placeholder(tf.float32,shape=(batch_size,num_labels,num_steps))
+    tf_train_dataset   = tf.placeholder(tf.float32,shape=(con.batch_size,con.image_size,con.image_size,con.num_channels,con.num_steps))
+    tf_train_labels    = tf.placeholder(tf.float32,shape=(con.batch_size,con.num_labels,con.num_steps))
     #validation data 
-    tf_valid_dataset   = tf.constant(gen_timestep_matrix(valid_dataset,num_steps))
+    tf_valid_dataset   = tf.constant(gen_timestep_matrix(valid_dataset,con.num_steps))
     #test data
-    tf_test_dataset    = tf.constant(gen_timestep_matrix(test_dataset,num_steps))
+    tf_test_dataset    = tf.constant(gen_timestep_matrix(test_dataset,con.num_steps))
     #submission data
-    tf_submission_data = tf.placeholder(tf.float32,shape=(28000,image_size,image_size,num_channels,num_steps))
+    tf_submission_data = tf.placeholder(tf.float32,shape=(28000,con.image_size,con.image_size,con.num_channels,con.num_steps))
 
-    def leNet5(data,state_in):
-        #C1
-        print("///// data is: ", type(data),data, "c1_w is: ", type(C1_w),C1_w, "c1_b is: ", type(C1_b),C1_b)
-        h_conv = tf.nn.relu(conv2d(data,C1_w,"conv1")+C1_b)
-        
-        #S2
-        h_pool = maxPool_2x2(h_conv,"pool1")
-       
-        #C3 
-        h_conv = tf.nn.relu(conv2d(h_pool,C2_w,"conv2")+C2_b)
-
-        #S4
-        h_pool = maxPool_2x2(h_conv,"pool2")
-
-        #reshape last conv layer 
-        shape = h_pool.get_shape().as_list()
-        h_pool_reshaped = tf.reshape(h_pool,[shape[0],shape[1]*shape[2]*shape[3]])
-        #FULLY CONNECTED NET
-        
-        #F5
-        h_FC1 = tf.nn.relu(tf.matmul(h_pool_reshaped,FC1_w)+FC1_b)
-        h_FC1 = tf.nn.dropout(h_FC1, keep_prob=keep_prob)
-        
-
-        #F6
-        h_FC2 = tf.nn.relu(tf.matmul(h_FC1,FC2_w)+FC2_b)
-        h_FC2 = tf.nn.dropout(h_FC2,keep_prob=keep_prob)
-        
-
-        #RNN
-        state_out = rnn_cell(h_FC2, RNN_w, RNN_b, state_in)
-
-        #FC3
-        FC_output = tf.matmul(state_out,FC3_w)+FC3_b
-        #shape is (16, 10)
-
-        return state_out, FC_output #rnn_cell(rnn_in, RNN_w, RNN_b, state)
-    
 
     #TRAINING, VALIDATION, TESTING AND SUBMISSION LOOPS
 
@@ -260,7 +180,7 @@ with graph.as_default():
     logits_train = []
     state_out_train.append(init_state_train)
     for train in tt:
-        state_out_tmp, logits_tr = leNet5(train, state_out_train[-1])
+        state_out_tmp, logits_tr = leNet5(train, state_out_train[-1],C1_w, C1_b,C2_w,C2_b,FC1_w,FC1_b,FC2_w,FC2_b,RNN_w,RNN_b,FC3_w,FC3_b,keep_prob)
         state_out_train.append(state_out_tmp)
         logits_train.append(logits_tr)
 
@@ -270,7 +190,7 @@ with graph.as_default():
     logits_val = []
     state_out_validation.append(init_state_valid)
     for valid in tv:
-        state_out_v_tmp, logits_v = leNet5(valid, state_out_validation[-1])
+        state_out_v_tmp, logits_v = leNet5(valid, state_out_validation[-1], C1_w, C1_b,C2_w,C2_b,FC1_w,FC1_b,FC2_w,FC2_b,RNN_w,RNN_b,FC3_w,FC3_b,keep_prob)
         state_out_validation.append(state_out_v_tmp)
         logits_val.append(logits_v)
     
@@ -280,7 +200,7 @@ with graph.as_default():
     logits_test = []
     state_out_test.append(init_state_test)
     for test in tte:
-        state_out_te_tmp, logits_tst = leNet5(test, state_out_test[-1])
+        state_out_te_tmp, logits_tst = leNet5(test, state_out_test[-1], C1_w, C1_b,C2_w,C2_b,FC1_w,FC1_b,FC2_w,FC2_b,RNN_w,RNN_b,FC3_w,FC3_b,keep_prob)
         state_out_test.append(state_out_te_tmp)
         logits_test.append(logits_tst)
 
@@ -289,7 +209,7 @@ with graph.as_default():
     logits_sub = []
     state_out_sub.append(init_state_sub)
     for sub in ts:
-        state_out_sub_tmp, logits_sb = leNet5(sub, state_out_sub[-1])
+        state_out_sub_tmp, logits_sb = leNet5(sub, state_out_sub[-1], C1_w, C1_b,C2_w,C2_b,FC1_w,FC1_b,FC2_w,FC2_b,RNN_w,RNN_b,FC3_w,FC3_b,keep_prob)
         state_out_sub.append(state_out_sub_tmp)
         logits_sub.append(logits_sb)
 
@@ -336,9 +256,9 @@ with graph.as_default():
         
         
     global_step = tf.Variable(0, trainable=False)  # count the number of steps taken.
-    learning_rate = tf.train.exponential_decay(learningRate,global_step,200, 0.00001, staircase=True)
+    learning_rate = tf.train.exponential_decay(con.learningRate,global_step,200, 0.00001, staircase=True)
     #Optimizer
-    optimizer = tf.train.AdamOptimizer(learning_rate=learningRate).minimize(loss[-1])
+    optimizer = tf.train.AdamOptimizer(learning_rate=con.learningRate).minimize(loss[-1])
     
     #Prediction for training ,valid,test set
     train_prediction = tf.nn.softmax(logits_train[-1])
@@ -360,7 +280,7 @@ if not os.path.exists("./net_train"):
     os.makedirs("./net_train")
 
 num_epochs = 2
-total_batch = int(train_dataset.shape[0]/batch_size)
+total_batch = int(train_dataset.shape[0]/con.batch_size)
 
 with tf.Session(graph=graph) as session:
     tf.global_variables_initializer().run()
@@ -378,17 +298,17 @@ with tf.Session(graph=graph) as session:
         for step in range(total_batch):
             # Pick an offset within the training data, which has been randomized.
             # Note: we could use better randomization across epochs.
-            offset = (step * batch_size) % (train_labels.shape[0] - batch_size)
+            offset = (step * con.batch_size) % (train_labels.shape[0] - con.batch_size)
 
             # Generate a minibatch.
-            batch_data = train_dataset[offset:(offset + batch_size), :]
-            batch_labels = train_labels[offset:(offset + batch_size), :]
+            batch_data = train_dataset[offset:(offset + con.batch_size), :]
+            batch_labels = train_labels[offset:(offset + con.batch_size), :]
 
             # Prepare a dictionary telling the session where to feed the minibatch.
             # The key of the dictionary is the placeholder node of the graph to be fed,
             # and the value is the numpy array to feed to it.
-            feed_dict = {tf_train_dataset : gen_timestep_matrix(batch_data,num_steps),
-                         tf_train_labels : gen_timestep_matrix(batch_labels,num_steps),
+            feed_dict = {tf_train_dataset : gen_timestep_matrix(batch_data,con.num_steps),
+                         tf_train_labels : gen_timestep_matrix(batch_labels,con.num_steps),
                          keep_prob:0.5}
             #print("(((( this is batch_data and batch_labels: ", np.shape(gen_timestep_matrix(batch_data,num_steps)), np.shape(gen_timestep_matrix(batch_labels,num_steps)))
 
