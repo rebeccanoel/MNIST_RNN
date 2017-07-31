@@ -9,11 +9,14 @@ import numpy as np
 import operator
 import matplotlib.pyplot as plt
 import os 
+import numpy as np
 import Const_HyperPara as con
 from datetime import datetime
 from tabulate import tabulate
 from sklearn.model_selection import train_test_split
 from LeNetFunction import leNet5
+#from reformat_original import reformat
+from reform_exp_one import reformat
 from helper_functions import weightBuilder, biasesBuilder, conv2d, maxPool_2x2, rnn_cell
 
 
@@ -43,16 +46,6 @@ del labels,data,dataset
 file_path ="./input/test.csv"
 submission_dataset = pd.read_csv(file_path)
 
-#RESHAPE DATA
-#format array to image format 
-
-import numpy as np
-
-def reformat(dataset, labels):
-  #dataset = dataset.reshape((-1, num_steps, image_size, image_size, num_channels)).astype(np.float32)
-  dataset = dataset.reshape((-1, con.image_size, con.image_size, con.num_channels)).astype(np.float32)
-  labels = (np.arange(con.num_labels) == labels[:,None]).astype(np.float32)
-  return dataset, labels
 
 train_dataset, train_labels = reformat(X_train, y_train)
 valid_dataset, valid_labels = reformat(X_validation, y_validation)
@@ -65,7 +58,6 @@ def gen_timestep_matrix(data, num_steps):
     repeat = np.repeat(expanded_tensor,con.num_steps, axis = -1)
     return repeat
 
-#Original Input Data Format from Le Net
 
 print ('Validation set :', len(valid_dataset), len(valid_labels))
 print ('Test set       :', len(test_dataset), len(test_labels))
@@ -75,9 +67,6 @@ del X_train,X_validation,X_test,y_train,y_validation,y_test
 
 
 #IMAGE SIZE AFTER SUB-SAMPLING
-#get final image size 
-# Create image size function based on input, filter size, padding and stride
-# 2 convolutions only
 def output_size_no_pool(input_size, filter_size, padding, conv_stride):
     if padding == 'same':
         padding = -1.00
@@ -89,12 +78,12 @@ def output_size_no_pool(input_size, filter_size, padding, conv_stride):
     output_2 = float(((output_1 - filter_size - 2*padding) / conv_stride) + 1.00)
     return int(np.ceil(output_2))
 
-#patch_size = 5
+
 final_image_size = output_size_no_pool(con.image_size, con.patch_size, padding='same', conv_stride=2)
 print(final_image_size)
 
 
-#image_size = 28
+
 # Create image size function based on input, filter size, padding and stride
 # 2 convolutions only with 2 pooling
 def output_size_pool(input_size, conv_filter_size, pool_filter_size, padding, conv_stride, pool_stride):
@@ -129,12 +118,6 @@ finalImageSize = output_size_pool(input_size=con.image_size, conv_filter_size=co
 
 
 
-'''
-removing def of weight builder etc. from here
-'''
-
-
-
 graph = tf.Graph()
 with graph.as_default():
 
@@ -151,17 +134,20 @@ with graph.as_default():
     FC3_b = biasesBuilder([con.num_labels],"FC3_b")
     RNN_w = weightBuilder([con.state_size + con.input_size, con.state_size], name = "RNN_Weights")
     RNN_b = biasesBuilder([con.state_size], name = "RNN_Biases")
+    #RNN_b = biasesBuilder([con.num_steps], name = "RNN_Biases")
 
-
-    #tf_train_dataset   = tf.placeholder(tf.float32,shape=(num_steps, batch_size,image_size,image_size,num_channels))
-    #tf_train_labels    = tf.placeholder(tf.float32,shape=(num_steps, batch_size,num_labels))
+    '''
     init_state_train = tf.zeros([con.batch_size,con.state_size])
-    #init_state_valid = tf.zeros([batch_size,state_size])
     init_state_valid = tf.zeros([4200,con.state_size])
     init_state_test = tf.zeros([4200,con.state_size])
     tf_submission_data = tf.placeholder(tf.float32,shape=(con.num_steps, 28000,con.image_size,con.image_size,con.num_channels))
     init_state_sub = tf.zeros([28000,con.state_size])
-
+    '''
+    init_state_train = tf.zeros([con.batch_size,con.state_size])
+    init_state_valid = tf.zeros([5,con.state_size])
+    init_state_test = tf.zeros([5,con.state_size])
+    tf_submission_data = tf.placeholder(tf.float32,shape=(con.num_steps, 28000,con.image_size,con.image_size,con.num_channels))
+    init_state_sub = tf.zeros([28000,con.state_size])
 
     tf_train_dataset   = tf.placeholder(tf.float32,shape=(con.batch_size,con.image_size,con.image_size,con.num_channels,con.num_steps))
     tf_train_labels    = tf.placeholder(tf.float32,shape=(con.batch_size,con.num_labels,con.num_steps))
@@ -214,7 +200,6 @@ with graph.as_default():
         logits_sub.append(logits_sb)
 
     with tf.name_scope('convolution1') as scope:
-        #weight & biases
         tf.summary.histogram("C1_w",C1_w)
         tf.summary.histogram("C1_b",C1_b)
     
@@ -233,14 +218,6 @@ with graph.as_default():
     with tf.name_scope('fullyConct3') as scope:
         tf.summary.histogram("FC3_w",FC3_w)
         tf.summary.histogram("FC3_b",FC3_b)
-    
-
-
-    #train computation
-    #state_out, logits = leNet5(tf_train_dataset, init_state_train)
-
-    #
-    
     with tf.name_scope('loss') as scope:
         print("!!THIS IS LOGITS: ", logits_train)
         print("THIS IS LABELS: ", tf_train_labels)
@@ -248,7 +225,6 @@ with graph.as_default():
         training_labels = tf.unstack(tf_train_labels, axis = -1)
         for n in training_labels:
             loss.append(tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits_train[-1],labels=n)))
-        #logits has dim (16, 2000), should be (16, 10)
         final_loss = loss[0]
         for r in range(1, len(loss)):
             final_loss += loss[r]
@@ -257,22 +233,20 @@ with graph.as_default():
         
     global_step = tf.Variable(0, trainable=False)  # count the number of steps taken.
     learning_rate = tf.train.exponential_decay(con.learningRate,global_step,200, 0.00001, staircase=True)
+    
     #Optimizer
     optimizer = tf.train.AdamOptimizer(learning_rate=con.learningRate).minimize(loss[-1])
     
     #Prediction for training ,valid,test set
     train_prediction = tf.nn.softmax(logits_train[-1])
-    #x, valid_output = leNet5(tf_valid_dataset, init_state_valid)
     valid_prediction = tf.nn.softmax(logits_val[-1])
-    #z, test_out = leNet5(tf_test_dataset, init_state_test)
     test_prediction  = tf.nn.softmax(logits_test[-1])
-    #t, sub_out = leNet5(tf_submission_data, init_state_sub)
     submission_prediction = tf.nn.softmax(state_out_sub[-1])
 
     #merge all summary tf_valid_dataset
     merged = tf.summary.merge_all()
 
-#%%time
+
 checkpoint_file =  "./checkpoints/LeNet5checkpoint.ckh"
 if not os.path.exists("./checkpoints"):
     os.makedirs("./checkpoints")
@@ -280,12 +254,13 @@ if not os.path.exists("./net_train"):
     os.makedirs("./net_train")
 
 num_epochs = 2
+#otal)batch divides the number of images in the dataset bt the batch size to give the number of batches
 total_batch = int(train_dataset.shape[0]/con.batch_size)
 
 with tf.Session(graph=graph) as session:
     tf.global_variables_initializer().run()
     
-    #declare log dir
+    
     now  = str(datetime.now()).replace(" ","_").replace(".","_").replace(":","_")
     print (now)
     train_writer = tf.summary.FileWriter(os.path.join("./net_train", now),session.graph)
@@ -293,7 +268,6 @@ with tf.Session(graph=graph) as session:
     print("Initialized")
     for epoch in range(num_epochs):
         avg_cost = 0.
-        #print tabulate(tabular_data=[],headers=["Step","loss","MiniBatch acc","valid acc"],tablefmt='orgtbl')
         print ('{:5}|{:15}|{:15}|{:15}'.format( "Step","loss","MiniBatch acc","valid acc"))
         for step in range(total_batch):
             # Pick an offset within the training data, which has been randomized.
@@ -310,7 +284,6 @@ with tf.Session(graph=graph) as session:
             feed_dict = {tf_train_dataset : gen_timestep_matrix(batch_data,con.num_steps),
                          tf_train_labels : gen_timestep_matrix(batch_labels,con.num_steps),
                          keep_prob:0.5}
-            #print("(((( this is batch_data and batch_labels: ", np.shape(gen_timestep_matrix(batch_data,num_steps)), np.shape(gen_timestep_matrix(batch_labels,num_steps)))
 
             _, l, predictions,summary = session.run([optimizer, loss, train_prediction,merged], feed_dict=feed_dict)
 
@@ -331,7 +304,6 @@ with tf.Session(graph=graph) as session:
         if (epoch+1) % 1 == 0:
             print ("\nEpoch:", '%04d' % (epoch+1), "cost=", "{:.9f}".format(avg_cost),"\n")
 
-    #endFOR epoches
     
     test_pred = session.run(test_prediction,feed_dict={keep_prob:1})
     print("Test accuracy: %.6f%%" % accuracy(test_pred, test_labels))
@@ -348,7 +320,7 @@ with tf.Session(graph=graph) as session:
     saver = tf.train.import_meta_graph(checkpoint_file +'.meta')
     saver.restore(session, checkpoint_file)
     sub_precition = session.run([tf.argmax(submission_prediction, 1)],
-                                feed_dict ={tf_submission_data:gen_timestep_matrix(submission_dataset, num_steps),keep_prob:1})
+                                feed_dict ={tf_submission_data:gen_timestep_matrix(submission_dataset, con.num_steps),keep_prob:1})
     
     # Write predictions to csv file
     results = pd.DataFrame({'ImageId': pd.Series(range(1, len(sub_precition[0]) + 1)),
